@@ -17,12 +17,15 @@ A/B Rule (từ slide):
   Đổi đồng thời chunking + hybrid + rerank + prompt = không biết biến nào có tác dụng.
 """
 
+import os
 import json
 import csv
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 from rag_answer import rag_answer
+
+LLM_MODEL = os.getenv("LLM_MODEL", "gpt-4o-mini")
 
 # =============================================================================
 # CẤU HÌNH
@@ -41,13 +44,12 @@ BASELINE_CONFIG = {
 }
 
 # Cấu hình variant (Sprint 3 — điều chỉnh theo lựa chọn của nhóm)
-# TODO Sprint 4: Cập nhật VARIANT_CONFIG theo variant nhóm đã implement
 VARIANT_CONFIG = {
-    "retrieval_mode": "hybrid",   # Hoặc "dense" nếu chỉ đổi rerank
+    "retrieval_mode": "hybrid",   # Chọn hybrid retrieval variant
     "top_k_search": 10,
     "top_k_select": 3,
-    "use_rerank": True,           # Hoặc False nếu variant là hybrid không rerank
-    "label": "variant_hybrid_rerank",
+    "use_rerank": False,
+    "label": "variant_hybrid",
 }
 
 
@@ -88,11 +90,9 @@ def score_faithfulness(
 
     Trả về dict với: score (1-5) và notes (lý do)
     """
-    # TODO Sprint 4: Implement scoring
-    # Tạm thời trả về None (yêu cầu chấm thủ công)
     return {
         "score": None,
-        "notes": "TODO: Chấm thủ công hoặc implement LLM-as-Judge",
+        "notes": "Use judge_metrics() for automated scoring.",
     }
 
 
@@ -115,7 +115,7 @@ def score_answer_relevance(
     """
     return {
         "score": None,
-        "notes": "TODO: Implement score_answer_relevance",
+        "notes": "Use judge_metrics() for automated scoring.",
     }
 
 
@@ -200,8 +200,80 @@ def score_completeness(
     """
     return {
         "score": None,
-        "notes": "TODO: Implement score_completeness (so sánh với expected_answer)",
+        "notes": "Use judge_metrics() for automated scoring.",
     }
+
+
+def judge_metrics(
+    query: str,
+    answer: str,
+    chunks_used: List[Dict[str, Any]],
+    expected_answer: str,
+) -> Dict[str, Dict[str, Any]]:
+    """Use LLM-as-Judge to rate faithfulness, relevance, and completeness."""
+    from openai import OpenAI
+
+    if not os.getenv("OPENAI_API_KEY"):
+        return {
+            "faithfulness": {"score": None, "notes": "OPENAI_API_KEY not set."},
+            "relevance": {"score": None, "notes": "OPENAI_API_KEY not set."},
+            "completeness": {"score": None, "notes": "OPENAI_API_KEY not set."},
+        }
+
+    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+    chunk_lines = []
+    for i, chunk in enumerate(chunks_used, start=1):
+        meta = chunk.get("metadata", {})
+        source = meta.get("source", "unknown")
+        section = meta.get("section", "")
+        text = chunk.get("text", "").replace("\n", " ")
+        chunk_lines.append(f"[{i}] source={source} section={section} text={text[:250]}")
+
+    prompt = f"""You are an evaluation assistant for a RAG answer.
+
+Query: {query}
+
+Answer: {answer}
+
+Retrieved chunks:
+{chr(10).join(chunk_lines)}
+
+Expected answer: {expected_answer}
+
+Rate the answer on three independent metrics:
+1. faithfulness (1-5): grounded in the retrieved chunks.
+2. relevance (1-5): directly answers the user query.
+3. completeness (1-5): covers the key points from the expected answer.
+
+Output only valid JSON with keys: faithfulness, relevance, completeness.
+Each value should be an object with 'score' (1-5 or null) and 'notes'.
+"""
+    try:
+        response = client.chat.completions.create(
+            model=LLM_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0,
+            max_tokens=400,
+        )
+        text = response.choices[0].message.content.strip()
+        json_start = text.find("{")
+        json_end = text.rfind("}")
+        if json_start >= 0 and json_end >= 0:
+            text = text[json_start:json_end+1]
+
+        data = json.loads(text)
+        return {
+            "faithfulness": data.get("faithfulness", {"score": None, "notes": "Missing."}),
+            "relevance": data.get("relevance", {"score": None, "notes": "Missing."}),
+            "completeness": data.get("completeness", {"score": None, "notes": "Missing."}),
+        }
+    except Exception as e:
+        return {
+            "faithfulness": {"score": None, "notes": f"LLM judge error: {e}"},
+            "relevance": {"score": None, "notes": f"LLM judge error: {e}"},
+            "completeness": {"score": None, "notes": f"LLM judge error: {e}"},
+        }
 
 
 # =============================================================================
@@ -276,10 +348,11 @@ def run_scorecard(
             chunks_used = []
 
         # --- Chấm điểm ---
-        faith = score_faithfulness(answer, chunks_used)
-        relevance = score_answer_relevance(query, answer)
+        judge = judge_metrics(query, answer, chunks_used, expected_answer)
+        faith = judge.get("faithfulness", {"score": None, "notes": "Judge unavailable."})
+        relevance = judge.get("relevance", {"score": None, "notes": "Judge unavailable."})
+        complete = judge.get("completeness", {"score": None, "notes": "Judge unavailable."})
         recall = score_context_recall(chunks_used, expected_sources)
-        complete = score_completeness(query, answer, expected_answer)
 
         row = {
             "id": question_id,
@@ -486,25 +559,28 @@ if __name__ == "__main__":
         print("Pipeline chưa implement. Hoàn thành Sprint 2 trước.")
         baseline_results = []
 
-    # --- Chạy Variant (sau khi Sprint 3 hoàn thành) ---
-    # TODO Sprint 4: Uncomment sau khi implement variant trong rag_answer.py
-    # print("\n--- Chạy Variant ---")
-    # variant_results = run_scorecard(
-    #     config=VARIANT_CONFIG,
-    #     test_questions=test_questions,
-    #     verbose=True,
-    # )
-    # variant_md = generate_scorecard_summary(variant_results, VARIANT_CONFIG["label"])
-    # (RESULTS_DIR / "scorecard_variant.md").write_text(variant_md, encoding="utf-8")
+    # --- Chạy Variant ---
+    print("\n--- Chạy Variant ---")
+    variant_results = []
+    try:
+        variant_results = run_scorecard(
+            config=VARIANT_CONFIG,
+            test_questions=test_questions,
+            verbose=True,
+        )
+        variant_md = generate_scorecard_summary(variant_results, VARIANT_CONFIG["label"])
+        (RESULTS_DIR / "scorecard_variant.md").write_text(variant_md, encoding="utf-8")
+        print(f"\nScorecard variant lưu tại: {RESULTS_DIR / 'scorecard_variant.md'}")
+    except NotImplementedError:
+        print("Variant pipeline chưa implement.")
 
     # --- A/B Comparison ---
-    # TODO Sprint 4: Uncomment sau khi có cả baseline và variant
-    # if baseline_results and variant_results:
-    #     compare_ab(
-    #         baseline_results,
-    #         variant_results,
-    #         output_csv="ab_comparison.csv"
-    #     )
+    if baseline_results and variant_results:
+        compare_ab(
+            baseline_results,
+            variant_results,
+            output_csv="ab_comparison.csv"
+        )
 
     print("\n\nViệc cần làm Sprint 4:")
     print("  1. Hoàn thành Sprint 2 + 3 trước")
