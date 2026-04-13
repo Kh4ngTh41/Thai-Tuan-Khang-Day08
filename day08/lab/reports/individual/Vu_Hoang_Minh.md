@@ -1,7 +1,7 @@
 # Báo Cáo Cá Nhân — Lab Day 08: RAG Pipeline
 
-**Họ và tên:** Vũ Hoàng Minh
-**Vai trò trong nhóm:** Tech Lead / Retrieval Owner (Hybrid)  
+**Họ và tên:** Thái Tuấn Khang
+**Vai trò trong nhóm:** Eval Owner / Retrieval Owner (Dense)  
 **Ngày nộp:** 13/04
 **Độ dài yêu cầu:** 500–800 từ
 
@@ -14,7 +14,7 @@
 > - Cụ thể bạn implement hoặc quyết định điều gì?
 > - Công việc của bạn kết nối với phần của người khác như thế nào?
 
-Tôi là Tech Lead và Retrieval Owner tập trung vào Hybrid retrieval. Tôi chủ yếu làm Sprint 1 (indexing), Sprint 2 (baseline dense retrieval), Sprint 3 (hybrid retrieval với RRF), và Sprint 4 (evaluation và documentation). Cụ thể, tôi implement `get_embedding()`, `build_index()` trong `index.py`, `retrieve_dense()`, `retrieve_sparse()`, `retrieve_hybrid()` trong `rag_answer.py`, và `compare_retrieval_strategies()`. Tôi quyết định dùng SentenceTransformer local cho embedding, BM25 cho sparse, và RRF cho hybrid vì nó balance precision và recall. Công việc của tôi kết nối với Eval Owner (đánh giá variants) và Documentation Owner (ghi lại tuning decisions).
+Tôi là Eval Owner và Retrieval Owner tập trung vào Dense retrieval. Tôi chủ yếu làm Sprint 2 (baseline dense), Sprint 4 (evaluation với eval.py), và hỗ trợ Sprint 1 (indexing). Cụ thể, tôi implement `retrieve_dense()` trong `rag_answer.py`, setup ChromaDB với cosine similarity, và viết scorecard trong eval.py với metrics như groundedness, relevance. Tôi quyết định dùng local SentenceTransformer vì privacy và cost. Công việc của tôi kết nối với Tech Lead (hybrid variants) và Documentation Owner (ghi eval results).
 
 ---
 
@@ -24,7 +24,7 @@ Tôi là Tech Lead và Retrieval Owner tập trung vào Hybrid retrieval. Tôi c
 > Ví dụ: chunking, hybrid retrieval, grounded prompt, evaluation loop.
 > Giải thích bằng ngôn ngữ của bạn — không copy từ slide.
 
-Tôi hiểu rõ hơn về hybrid retrieval và RRF. Hybrid kết hợp dense (semantic) và sparse (keyword) để cover cả paraphrase queries và exact terms. RRF rank fusion đơn giản nhưng hiệu quả, không cần tuning weights phức tạp. Nó giúp retrieval robust hơn, đặc biệt cho queries đa dạng như trong test_questions.json. Grounded prompt cũng quan trọng — ép LLM cite sources và abstain nếu thiếu evidence, tránh hallucination.
+Tôi hiểu rõ hơn về dense retrieval và evaluation metrics. Dense dùng embedding để tìm semantic similarity, tốt cho paraphrase nhưng yếu với exact keywords. Evaluation loop quan trọng — dùng test_questions.json để measure accuracy, groundedness, và abstain rate. Groundedness check nếu answer dựa trên retrieved context, tránh hallucination. Điều này giúp quantify improvements từ variants.
 
 ---
 
@@ -34,7 +34,7 @@ Tôi hiểu rõ hơn về hybrid retrieval và RRF. Hybrid kết hợp dense (se
 > Lỗi nào mất nhiều thời gian debug nhất?
 > Giả thuyết ban đầu của bạn là gì và thực tế ra sao?
 
-Tôi ngạc nhiên khi dense retrieval trả lời "I do not know" cho "ERR-403-AUTH" nhưng sparse/hybrid trả lời được — vì embedding không capture exact error codes tốt. Khó khăn nhất là debug chunking và metadata — ban đầu chunks thiếu source, dẫn đến citations sai. Giả thuyết ban đầu: dense luôn tốt hơn sparse, nhưng thực tế hybrid tốt nhất cho balance. Cũng gặp issue với OpenAI API rate limits khi test nhiều.
+Tôi ngạc nhiên khi dense retrieval score thấp cho queries như "ERR-403-AUTH" — vì embedding không prioritize error codes. Khó khăn nhất là setup eval.py với LLM-as-judge cho groundedness, mất thời gian prompt engineering. Giả thuyết ban đầu: dense luôn outperform sparse, nhưng thực tế sparse tốt hơn cho keyword-heavy queries. Cũng gặp issue với metadata consistency trong chunks.
 
 ---
 
@@ -46,11 +46,11 @@ Tôi ngạc nhiên khi dense retrieval trả lời "I do not know" cho "ERR-403-
 > - Lỗi nằm ở đâu: indexing / retrieval / generation?
 > - Variant có cải thiện không? Tại sao có/không?
 
-**Câu hỏi:** ERR-403-AUTH là lỗi gì và cách xử lý?
+**Câu hỏi:** SLA xử lý ticket P1 là bao lâu?
 
 **Phân tích:**
 
-Baseline (dense) trả lời "I do not know" — sai, điểm thấp vì không grounded. Lỗi ở retrieval: embedding không match error code, chunks retrieved không chứa "ERR-403-AUTH". Sparse trả lời đúng với citation từ it/access-control-sop.md — điểm cao vì keyword match. Hybrid cũng đúng, cải thiện từ dense bằng RRF. Generation OK khi có context, nhưng abstain khi thiếu. Variant (hybrid) cải thiện baseline vì kết hợp strengths, nhưng không fix nếu docs thiếu info.
+Baseline (dense) trả lời đúng với citation từ support/sla-p1-2026.pdf — điểm cao vì retrieval tìm đúng chunk. Không lỗi, generation grounded. Sparse cũng đúng nhưng dense tốt hơn cho semantic match. Hybrid không cải thiện nhiều vì dense đã tốt, nhưng RRF đảm bảo consistency. Lỗi tiềm ẩn ở chunking nếu chunks quá nhỏ miss context, nhưng ở đây OK.
 
 ---
 
@@ -60,7 +60,7 @@ Baseline (dense) trả lời "I do not know" — sai, điểm thấp vì không 
 > Không phải "làm tốt hơn chung chung" mà phải là:
 > "Tôi sẽ thử X vì kết quả eval cho thấy Y."
 
-Tôi sẽ thử rerank với cross-encoder vì eval cho thấy top-3 chunks đôi khi có noise, dẫn đến answers kém. Cũng thử query expansion cho queries mơ hồ như "ERR-403-AUTH là lỗi gì?", vì retrieval hiện tại yếu với insufficient context.
+Tôi sẽ thử fine-tune embedding model vì eval cho thấy dense yếu với domain-specific terms như error codes. Cũng implement automated eval với more metrics như faithfulness, vì current scorecard manual.
 
 ---
 
