@@ -1,8 +1,11 @@
 # Báo Cáo Cá Nhân — Lab Day 08: RAG Pipeline
 
 **Họ và tên:** Thái Tuấn Khang
+
 **Vai trò trong nhóm:** Eval Owner / Retrieval Owner (Dense)  
+
 **Ngày nộp:** 13/04
+
 **Độ dài yêu cầu:** 500–800 từ
 
 ---
